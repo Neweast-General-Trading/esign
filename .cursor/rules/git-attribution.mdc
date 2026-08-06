@@ -1,0 +1,14 @@
+---
+description: Git commits under jad.sakour only — no Cursor co-author
+alwaysApply: true
+---
+
+# Git attribution (jad.sakour)
+
+When creating git commits for this project:
+
+- Author must be **jad.sakour** only (`AhmadMkhlalati7@gmail.com`)
+- NEVER add `Co-authored-by`, `Signed-off-by`, or any Cursor/agent attribution to commit messages
+- Do not mention Cursor, cursoragent, or AI in commits unless explicitly requested
+- Only commit or push when the user explicitly asks
+- Before push, verify: `git log -1 --format=full` has no co-author trailer
