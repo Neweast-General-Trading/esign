@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", Georgia, serif;
+}
+
+html,
+body {
+  @apply bg-white text-slate-900 antialiased;
+  font-family: var(--font-sans);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+@layer components {
+  .app-page {
+    background:
+      radial-gradient(circle at top right, rgba(220, 38, 38, 0.06), transparent 28%),
+      radial-gradient(circle at bottom left, rgba(16, 185, 129, 0.07), transparent 26%),
+      linear-gradient(180deg, #f8fafc 0%, #ffffff 42%, #f8fafc 100%);
+  }
+
+  .app-surface {
+    @apply border border-slate-200/80 bg-white shadow-[0_12px_40px_-28px_rgba(15,23,42,0.35)];
+  }
+
+  .app-panel {
+    @apply border border-slate-200 bg-slate-50/70;
+  }
+
+  .doc-content h1,
+  .doc-content h2,
+  .doc-content h3 {
+    @apply font-semibold text-slate-900;
+  }
+
+  .doc-content p {
+    @apply mb-3 leading-relaxed text-slate-700;
+  }
+
+  .doc-content ul {
+    @apply mb-3 list-disc ps-6;
+  }
+
+  .doc-content ol {
+    @apply mb-3 list-decimal ps-6;
+  }
+
+  .doc-content strong {
+    @apply font-bold;
+  }
+
+  .ProseMirror {
+    @apply min-h-[220px] rounded-md border border-slate-200 bg-white px-4 py-3 outline-none;
+  }
+
+  .ProseMirror:focus {
+    @apply border-red-300 ring-2 ring-red-500/20;
+  }
+
+  .ProseMirror p {
+    @apply mb-2;
+  }
+
+  .ProseMirror h1 {
+    @apply mb-3 text-2xl font-bold;
+  }
+
+  .ProseMirror h2 {
+    @apply mb-2 text-xl font-semibold;
+  }
+
+  .ProseMirror h3 {
+    @apply mb-2 text-lg font-semibold;
+  }
+
+  .ProseMirror ul {
+    @apply mb-2 list-disc ps-6;
+  }
+
+  .ProseMirror ol {
+    @apply mb-2 list-decimal ps-6;
+  }
+}
