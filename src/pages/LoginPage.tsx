@@ -4,12 +4,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/context/AuthContext";
+import { APP_NAME } from "@/lib/branding";
 import { assetUrl } from "@/lib/utils";
 
+function MicrosoftIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 23 23" className="h-4 w-4">
+      <rect x="1" y="1" width="10" height="10" fill="#F25022" />
+      <rect x="12" y="1" width="10" height="10" fill="#7FBA00" />
+      <rect x="1" y="12" width="10" height="10" fill="#00A4EF" />
+      <rect x="12" y="12" width="10" height="10" fill="#FFB900" />
+    </svg>
+  );
+}
+
 export default function LoginPage() {
-  const { login, isLoggingIn } = useAuth();
+  const { login, loginWithMicrosoft, isLoggingIn } = useAuth();
+  const [showEmailFallback, setShowEmailFallback] = useState(false);
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("sakour@neweast.co");
+  const [email, setEmail] = useState("");
   const [error, setError] = useState("");
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -31,7 +44,7 @@ export default function LoginPage() {
           <div>
             <img src={assetUrl("logo.png")} alt="NEWEAST" className="h-12 w-auto brightness-0 invert" />
             <p className="mt-8 text-xs font-semibold tracking-[0.22em] text-rose-200/90">
-              NEWEAST E-SIGN
+              {APP_NAME.toUpperCase()}
             </p>
             <h1 className="mt-3 font-display text-4xl leading-tight tracking-tight">
               Sign documents.
@@ -39,12 +52,13 @@ export default function LoginPage() {
               Track every step.
             </h1>
             <p className="mt-4 max-w-sm text-sm leading-6 text-slate-300">
-              Create NDAs and HR documents, collect electronic signatures, and follow
+              Create NDAs and HR documents, collect signatures with {APP_NAME}, and follow
               recipient progress from one workspace.
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
-            Temporary open login is enabled until Azure authentication is activated.
+            Sign in with your NEWEAST Microsoft 365 account. Intranet OTP links still
+            work when you open {APP_NAME} from Intranet.
           </div>
         </aside>
 
@@ -56,49 +70,75 @@ export default function LoginPage() {
             HR PORTAL
           </div>
           <h2 className="mt-2 font-display text-3xl tracking-tight text-slate-900">
-            Continue
+            Sign in
           </h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Enter your work email to access E-Sign. No password is required for now.
+            Use your NEWEAST Microsoft account to access {APP_NAME}.
           </p>
 
-          <form className="mt-8 space-y-4" onSubmit={(e) => void handleSubmit(e)}>
-            <div className="space-y-2">
-              <Label htmlFor="login-name">Full name (optional)</Label>
-              <div className="relative">
-                <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  id="login-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="ps-9"
-                  placeholder="Your name"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="login-email">Work email</Label>
-              <div className="relative">
-                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  id="login-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="ps-9"
-                  placeholder="you@neweast.co"
-                  required
-                />
-              </div>
-            </div>
+          <Button
+            type="button"
+            className="mt-8 h-11 w-full"
+            onClick={() => loginWithMicrosoft()}
+            disabled={isLoggingIn}
+          >
+            {isLoggingIn ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <MicrosoftIcon />
+            )}
+            {isLoggingIn ? "Redirecting..." : "Sign in with Microsoft"}
+          </Button>
 
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          <div className="mt-8">
+            <button
+              type="button"
+              className="text-sm font-medium text-slate-500 underline-offset-4 hover:text-slate-800 hover:underline"
+              onClick={() => setShowEmailFallback((v) => !v)}
+            >
+              {showEmailFallback ? "Hide email fallback" : "Continue with email instead"}
+            </button>
+          </div>
 
-            <Button type="submit" className="h-11 w-full" disabled={isLoggingIn}>
-              {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {isLoggingIn ? "Signing in..." : "Continue to E-Sign"}
-            </Button>
-          </form>
+          {showEmailFallback ? (
+            <form className="mt-4 space-y-4" onSubmit={(e) => void handleSubmit(e)}>
+              <div className="space-y-2">
+                <Label htmlFor="login-name">Full name (optional)</Label>
+                <div className="relative">
+                  <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    id="login-name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="ps-9"
+                    placeholder="Your name"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="login-email">Work email</Label>
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    id="login-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="ps-9"
+                    placeholder="you@neweast.co"
+                    required
+                  />
+                </div>
+              </div>
+
+              {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+              <Button type="submit" variant="outline" className="h-11 w-full" disabled={isLoggingIn}>
+                {isLoggingIn ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Continue with email
+              </Button>
+            </form>
+          ) : null}
         </div>
       </div>
     </div>

@@ -1,12 +1,13 @@
 import { FileStack, FileText, LayoutDashboard, LogOut, Menu, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
+import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 import { cn } from "@/lib/utils";
 
 interface TopBarProps {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
-  currentPage: "dashboard" | "documents" | "create" | "view" | "document-types";
+  currentPage: "dashboard" | "documents" | "create" | "view" | "document-types" | "configure-signatories";
   onNavigateDashboard: () => void;
   onNavigateDocuments: () => void;
   onNavigateCreate: () => void;
@@ -38,10 +39,8 @@ export default function TopBar({
         <div className="flex items-center gap-2">
           <PenLine className="h-6 w-6 text-red-600" />
           <div>
-            <h1 className="text-lg font-semibold text-slate-900">E-Sign</h1>
-            <p className="hidden text-xs text-slate-500 sm:block">
-              Create and collect electronic signatures
-            </p>
+            <h1 className="text-lg font-semibold text-slate-900">{APP_NAME}</h1>
+            <p className="hidden text-xs text-slate-500 sm:block">{APP_TAGLINE}</p>
           </div>
         </div>
         <nav className="ms-2 hidden items-center gap-1 md:flex">

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { APP_NAME } from "@/lib/branding";
 
 export const SIGNATURE_FONT =
   "'Segoe Script', 'Brush Script MT', 'Lucida Handwriting', cursive";
@@ -53,8 +54,8 @@ interface ElectronicSignatureDialogProps {
 
 export default function ElectronicSignatureDialog({
   open,
-  title = "Electronic Signature",
-  description = "Enter your full name below. An electronic signature will be generated and placed on the document.",
+  title = APP_NAME,
+  description = "Enter your full name below. Your signature will be generated and placed on the document via E-Sign.",
   confirmLabel = "Sign & Confirm",
   defaultName = "",
   isSubmitting = false,

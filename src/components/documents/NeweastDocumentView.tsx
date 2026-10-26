@@ -1,134 +1,195 @@
 import { ElectronicSignaturePreview } from "@/components/signature/ElectronicSignatureDialog";
 import type { SignDocument } from "@/lib/types";
+import {
+  GENERATED_BY_LABEL,
+  OFFICIAL_DOCUMENT_LABEL,
+  SIGNED_VIA_LABEL,
+} from "@/lib/branding";
+import {
+  hasCompanySignatureField,
+  hasInlineSignatureFields,
+  hydrateSignatureFields,
+} from "@/lib/signature-fields";
+import {
+  collectFieldValues,
+  hydrateInputFields,
+} from "@/lib/input-fields";
+import { compactSignerOrdersInHtml } from "@/lib/signer-order";
 import { assetUrl, formatDateTime } from "@/lib/utils";
 
 interface NeweastDocumentViewProps {
   document: Pick<
     SignDocument,
+    | "id"
     | "title"
     | "documentType"
     | "contentHtml"
     | "createdByName"
     | "createdAt"
     | "hrSignature"
+    | "includeCompanySignature"
     | "recipients"
     | "completedAt"
     | "status"
   >;
   showSignatures?: boolean;
+  /** Live values while the current signer is filling the form */
+  draftFieldValues?: Record<string, string>;
 }
 
 export default function NeweastDocumentView({
   document,
   showSignatures = true,
+  draftFieldValues,
 }: NeweastDocumentViewProps) {
   const employeeSignatures = document.recipients.filter((r) => r.status === "signed");
+  const ref = document.id.slice(0, 8).toUpperCase();
+  const contentHtml = compactSignerOrdersInHtml(document.contentHtml);
+  const inlineFields = hasInlineSignatureFields(contentHtml);
+  const showCompanyBlock =
+    Boolean(document.includeCompanySignature) ||
+    Boolean(document.hrSignature) ||
+    hasCompanySignatureField(contentHtml);
+  const mergedValues = {
+    ...collectFieldValues(document.recipients),
+    ...(draftFieldValues || {}),
+  };
+  const bodyHtml = hydrateInputFields(
+    hydrateSignatureFields(contentHtml, {
+      recipients: document.recipients,
+      hrSignature: document.hrSignature,
+    }),
+    mergedValues,
+  );
+  const showFooterSignatures = showSignatures && !inlineFields;
 
   return (
-    <article className="neweast-document mx-auto max-w-[780px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="bg-gradient-to-r from-red-700 via-red-600 to-rose-500 px-6 py-4 text-white">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-[11px] font-semibold tracking-[0.18em] uppercase opacity-90">
-              NEWEAST E-Sign Document
-            </div>
-            <h1 className="mt-1 text-xl font-bold leading-snug">{document.title}</h1>
-            <p className="mt-1 text-xs text-white/85">
-              {document.documentType} · Prepared by {document.createdByName}
-            </p>
-          </div>
+    <article className="neweast-document mx-auto max-w-[794px] overflow-hidden border border-slate-200 bg-white shadow-[0_18px_50px_-36px_rgba(15,23,42,0.4)]">
+      <div className="px-8 pb-7 pt-8 md:px-11">
+        <div className="mb-3.5 flex items-center justify-between gap-4">
           <img
             src={assetUrl("logo.png")}
             alt="NEWEAST"
-            className="h-10 w-auto rounded bg-white/95 p-1.5 object-contain"
+            className="h-12 w-auto object-contain"
           />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-3 border-b border-slate-200 bg-slate-50 px-6 py-3 text-[11px] text-slate-600">
-        <div>
-          <div className="font-semibold text-slate-400">Document Type</div>
-          <div className="mt-0.5 font-medium text-slate-800">{document.documentType}</div>
-        </div>
-        <div>
-          <div className="font-semibold text-slate-400">Created</div>
-          <div className="mt-0.5 font-medium text-slate-800">
-            {formatDateTime(document.createdAt)}
+          <div className="text-end">
+            <div className="text-[13px] font-bold tracking-wide text-red-900">
+              NEWEAST GENERAL TRADING
+            </div>
+            <div className="mt-0.5 text-[10px] text-slate-500">
+              {OFFICIAL_DOCUMENT_LABEL}
+            </div>
           </div>
         </div>
-        <div>
-          <div className="font-semibold text-slate-400">Status</div>
-          <div className="mt-0.5 font-medium capitalize text-slate-800">
-            {document.status.replaceAll("_", " ")}
-          </div>
-        </div>
-      </div>
 
-      <div className="px-6 py-6">
+        <div className="mb-0.5 h-[3px] bg-red-900" />
+        <div className="mb-5 h-px bg-slate-300" />
+
+        <h1 className="mb-5 font-sans text-lg font-bold leading-snug tracking-tight text-slate-900">
+          {document.title}
+        </h1>
+
         <div
-          className="doc-content text-[14px] leading-relaxed text-slate-700"
-          dangerouslySetInnerHTML={{ __html: document.contentHtml }}
+          className="doc-content font-serif text-[13.5px] leading-relaxed text-slate-800"
+          dangerouslySetInnerHTML={{ __html: bodyHtml }}
         />
-      </div>
 
-      {showSignatures ? (
-        <div className="border-t border-slate-200 px-6 py-5">
-          <div className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">
-            Electronic Signatures
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                HR / Company
-              </div>
-              {document.hrSignature ? (
-                <>
-                  <ElectronicSignaturePreview name={document.hrSignature.name} />
-                  <p className="mt-2 text-[11px] text-slate-500">
-                    {document.hrSignature.name}
-                    <br />
-                    Signed {formatDateTime(document.hrSignature.signedAt)}
-                  </p>
-                </>
-              ) : (
-                <p className="text-sm text-slate-400">Awaiting HR signature</p>
-              )}
+        {showFooterSignatures ? (
+          <>
+            <div className="mb-4 mt-8 h-px bg-slate-200" />
+            <div className="mb-4 font-sans text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500">
+              Signatures
             </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Employee(s)
-              </div>
-              {employeeSignatures.length === 0 ? (
-                <p className="text-sm text-slate-400">Awaiting employee signatures</p>
-              ) : (
-                <div className="space-y-3">
-                  {employeeSignatures.map((r) => (
-                    <div key={r.id}>
-                      <ElectronicSignaturePreview name={r.signatureName || r.name} />
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {r.name}
-                        {r.signedAt ? (
-                          <>
-                            <br />
-                            Signed {formatDateTime(r.signedAt)}
-                          </>
-                        ) : null}
-                      </p>
-                    </div>
-                  ))}
+            <div className={showCompanyBlock ? "grid gap-8 sm:grid-cols-2" : "grid gap-8"}>
+              {showCompanyBlock ? (
+              <div>
+                <div className="mb-2 font-sans text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  For the Company / HR
                 </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
+                {document.hrSignature ? (
+                  <>
+                    <div className="border-b border-slate-900 pb-1">
+                      <ElectronicSignaturePreview
+                        name={document.hrSignature.name}
+                        className="min-h-14 border-0 bg-transparent from-transparent to-transparent px-0"
+                      />
+                    </div>
+                    <p className="mt-2 text-[11px] leading-relaxed text-slate-600">
+                      <strong className="text-slate-800">{document.hrSignature.name}</strong>
+                      <br />
+                      Signed {formatDateTime(document.hrSignature.signedAt)}
+                      <br />
+                      <span className="text-[10px] text-slate-400">
+                        {SIGNED_VIA_LABEL}
+                      </span>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="mb-2 h-11 border-b border-slate-300" />
+                    <p className="text-[11px] text-slate-400">Awaiting company signature</p>
+                  </>
+                )}
+              </div>
+              ) : null}
 
-      <footer className="border-t border-slate-200 bg-slate-50 px-6 py-3 text-center text-[10px] text-slate-400">
-        Official NEWEAST E-Sign Document
-        {document.completedAt ? ` · Completed ${formatDateTime(document.completedAt)}` : ""}
-        {" · "}© {new Date().getFullYear()} Neweast Trading
-      </footer>
+              <div>
+                <div className="mb-2 font-sans text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  {showCompanyBlock
+                    ? `Employee${employeeSignatures.length > 1 ? "s" : ""}`
+                    : `Signator${employeeSignatures.length === 1 ? "y" : "ies"}`}
+                </div>
+                {employeeSignatures.length === 0 ? (
+                  <>
+                    <div className="mb-2 h-11 border-b border-slate-300" />
+                    <p className="text-[11px] text-slate-400">Awaiting signature</p>
+                  </>
+                ) : (
+                  <div className="space-y-5">
+                    {employeeSignatures.map((r) => (
+                      <div key={r.id}>
+                        <div className="border-b border-slate-900 pb-1">
+                          <ElectronicSignaturePreview
+                            name={r.signatureName || r.name}
+                            className="min-h-14 border-0 bg-transparent from-transparent to-transparent px-0"
+                          />
+                        </div>
+                        <p className="mt-2 text-[11px] leading-relaxed text-slate-600">
+                          <strong className="text-slate-800">{r.name}</strong>
+                          {r.signedAt ? (
+                            <>
+                              <br />
+                              Signed {formatDateTime(r.signedAt)}
+                            </>
+                          ) : null}
+                          <br />
+                          <span className="text-[10px] text-slate-400">
+                            {SIGNED_VIA_LABEL}
+                          </span>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {inlineFields && showSignatures ? (
+          <p className="mt-6 text-center font-sans text-[10px] text-slate-400">
+            Signatures appear in the placed fields above.
+          </p>
+        ) : null}
+
+        <footer className="mt-8 border-t border-slate-200 pt-3 text-center font-sans text-[9px] leading-relaxed text-slate-400">
+          {GENERATED_BY_LABEL}
+          {document.completedAt ? ` · Completed ${formatDateTime(document.completedAt)}` : ""}
+          {" · "}
+          Ref ES-{ref}
+          {" · "}© {new Date().getFullYear()} Neweast Trading
+        </footer>
+      </div>
     </article>
   );
 }

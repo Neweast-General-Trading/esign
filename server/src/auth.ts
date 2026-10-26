@@ -1,9 +1,12 @@
 import jwt from "jsonwebtoken";
 
+export type AuthSource = "intranet" | "microsoft" | "open";
+
 export interface AuthUser {
   email: string;
   name: string;
   role?: string;
+  authSource?: AuthSource;
 }
 
 function getJwtSecret() {
@@ -14,8 +17,11 @@ function getJwtSecret() {
   return secret;
 }
 
-export function signAppToken(user: AuthUser) {
-  return jwt.sign(user, getJwtSecret(), { expiresIn: "12h" });
+export function signAppToken(
+  user: AuthUser,
+  authSource: AuthSource = user.authSource ?? "open",
+) {
+  return jwt.sign({ ...user, authSource }, getJwtSecret(), { expiresIn: "12h" });
 }
 
 export function verifyAppToken(token: string): AuthUser {
@@ -24,5 +30,22 @@ export function verifyAppToken(token: string): AuthUser {
     email: payload.email,
     name: payload.name,
     role: payload.role,
+    authSource: payload.authSource,
   };
+}
+
+/** Accept a JWT signed with the shared APP_JWT_SECRET (Intranet) and issue a fresh E-Sign session. */
+export function exchangeSharedAppToken(token: string) {
+  const payload = verifyAppToken(token);
+  const email = payload.email?.trim();
+  if (!email) throw new Error("Invalid token payload");
+
+  const user: AuthUser = {
+    email,
+    name: payload.name?.trim() || email,
+    role: payload.role || "hr",
+    authSource: "intranet",
+  };
+
+  return { user, token: signAppToken(user, "intranet") };
 }

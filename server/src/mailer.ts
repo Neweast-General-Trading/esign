@@ -1,6 +1,8 @@
 import nodemailer from "nodemailer";
 import { escapeHtml } from "./employees.js";
 
+const APP_NAME = "E-Sign";
+
 export interface MailResult {
   ok: boolean;
   dryRun?: boolean;
@@ -50,8 +52,17 @@ function applyTemplate(template: string, vars: Record<string, string>) {
   });
 }
 
-function testMailOverride() {
-  return (process.env.MAIL_TEST_OVERRIDE || "").trim().toLowerCase();
+export function getMailBccList(): string[] {
+  const raw = (process.env.MAIL_BCC || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,;]+/)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function mailBccList() {
+  return getMailBccList();
 }
 
 function emailShell(options: {
@@ -101,7 +112,7 @@ function emailShell(options: {
           </tr>
           <tr>
             <td style="padding:18px 28px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.6;color:#64748b;">
-              ${options.footerNote || "This message was sent by NEWEAST E-Sign. Please do not reply to this email."}<br/>
+              ${options.footerNote || `This message was sent by ${APP_NAME}. Please do not reply to this email.`}<br/>
               &copy; ${year} Neweast Trading. All rights reserved.
             </td>
           </tr>
@@ -169,21 +180,11 @@ async function sendMail(options: {
   html: string;
   text?: string;
 }): Promise<MailResult> {
-  const override = testMailOverride();
-  const intendedTo = options.to;
-  const to = override || options.to;
-  const subject = override
-    ? `[TEST → ${intendedTo}] ${options.subject}`
-    : options.subject;
-  const html = override
-    ? `<div style="margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:13px;">
-        <strong>TEST MODE</strong> — intended recipient was <code>${escapeHtml(intendedTo)}</code>.
-        All mail is redirected to <code>${escapeHtml(override)}</code> until testing is finished.
-      </div>${options.html}`
-    : options.html;
+  const to = options.to.trim();
+  const bcc = mailBccList();
 
   if (!mailEnabled()) {
-    console.log("[e-sign mail:dry-run]", { to, intendedTo, subject });
+    console.log("[e-sign mail:dry-run]", { to, bcc, subject: options.subject });
     return { ok: true, dryRun: true };
   }
 
@@ -194,12 +195,13 @@ async function sendMail(options: {
         `"E-Sign | NEWEAST" <${process.env.SMTP_USER || "esign.app@neweast.co"}>`,
       replyTo: process.env.MAIL_REPLY_TO || undefined,
       to,
-      subject,
-      html,
+      bcc: bcc.length > 0 ? bcc : undefined,
+      subject: options.subject,
+      html: options.html,
       text: options.text,
     });
-    if (override) {
-      console.log(`[e-sign mail:test-redirect] ${intendedTo} -> ${override}`);
+    if (bcc.length > 0) {
+      console.log(`[e-sign mail:bcc] ${to} (+ ${bcc.join(", ")})`);
     }
     return { ok: true };
   } catch (error) {
@@ -213,12 +215,12 @@ export const DEFAULT_SIGN_EMAIL_SUBJECT = "Action required: sign {{documentTitle
 
 export const DEFAULT_SIGN_EMAIL_BODY = `Dear {{employeeName}},
 
-You have been requested to electronically sign the following document.
+You have been requested to sign the following document via ${APP_NAME}.
 
 Please use the secure button in this email. Your link is personal and should not be shared.
 
 Regards,
-NEWEAST E-Sign`;
+${APP_NAME}`;
 
 export async function sendSignRequestEmail(params: {
   to: string;
@@ -285,8 +287,8 @@ export async function sendSignRequestEmail(params: {
   </table>`;
 
   const html = emailShell({
-    preheader: `Please sign ${params.documentTitle} — your personal E-Sign link is ready.`,
-    eyebrow: "NEWEAST E-SIGN",
+    preheader: `Please sign ${params.documentTitle} — your personal ${APP_NAME} link is ready.`,
+    eyebrow: APP_NAME.toUpperCase(),
     title: "Signature requested",
     bodyHtml: `
       ${paragraphs}
@@ -332,7 +334,7 @@ export async function sendCompletedCopyEmail(params: {
 
   const html = emailShell({
     preheader: `${params.documentTitle} is fully signed.`,
-    eyebrow: "NEWEAST E-SIGN",
+    eyebrow: APP_NAME.toUpperCase(),
     title: "Document completed",
     bodyHtml: `
       <p style="margin:0 0 14px;font-size:15px;line-height:1.7;color:#334155;">
@@ -356,5 +358,48 @@ export async function sendCompletedCopyEmail(params: {
     subject: `Signed copy: ${params.documentTitle}`,
     html,
     text: `Dear ${params.recipientName},\n\nThe document ${params.documentTitle} has been signed by all parties.\n\nView: ${params.viewUrl}\n`,
+  });
+}
+
+export async function sendThankYouForSigningEmail(params: {
+  to: string;
+  recipientName: string;
+  documentTitle: string;
+  documentType: string;
+  viewUrl: string;
+  waitingForNext?: boolean;
+}) {
+  const nextNote = params.waitingForNext
+    ? `<p style="margin:0 0 14px;font-size:15px;line-height:1.7;color:#334155;">
+        The next signatory has been notified. You will receive the final signed copy once everyone has completed.
+      </p>`
+    : `<p style="margin:0 0 14px;font-size:15px;line-height:1.7;color:#334155;">
+        You will receive the final signed copy once all remaining parties have completed.
+      </p>`;
+
+  const html = emailShell({
+    preheader: `Thank you for signing ${params.documentTitle}.`,
+    eyebrow: APP_NAME.toUpperCase(),
+    title: "Thank you for signing",
+    bodyHtml: `
+      <p style="margin:0 0 14px;font-size:15px;line-height:1.7;color:#334155;">
+        Dear ${escapeHtml(params.recipientName)},
+      </p>
+      <p style="margin:0 0 14px;font-size:15px;line-height:1.7;color:#334155;">
+        Thank you — your signature on
+        <strong>${escapeHtml(params.documentTitle)}</strong>
+        (${escapeHtml(params.documentType)}) has been recorded successfully.
+      </p>
+      ${nextNote}
+      ${ctaButton(params.viewUrl, "View Document", "#059669")}
+      ${secureLinkCard(params.viewUrl)}
+    `,
+  });
+
+  return sendMail({
+    to: params.to,
+    subject: `Thank you for signing: ${params.documentTitle}`,
+    html,
+    text: `Dear ${params.recipientName},\n\nThank you — your signature on ${params.documentTitle} has been recorded.\n\nView: ${params.viewUrl}\n`,
   });
 }

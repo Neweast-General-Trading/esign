@@ -1,14 +1,16 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
 }
 
 html,
 body {
-  @apply bg-white text-slate-900 antialiased;
+  @apply bg-white text-slate-900;
   font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 .font-display {
@@ -53,8 +55,34 @@ body {
     @apply font-bold;
   }
 
+  .doc-content table {
+    @apply my-3 w-full border-collapse text-[13px];
+  }
+
+  .doc-content th,
+  .doc-content td {
+    @apply border border-slate-300 px-2 py-1.5 align-top;
+  }
+
+  .doc-content th {
+    @apply bg-slate-50 font-semibold;
+  }
+
+  .doc-content img {
+    @apply my-2 block h-auto max-w-full;
+  }
+
+  .doc-content blockquote {
+    @apply my-3 border-s border-slate-300 ps-3.5 text-slate-600;
+  }
+
+  .doc-content[dir="rtl"],
+  .doc-content [dir="rtl"] {
+    text-align: right;
+  }
+
   .ProseMirror {
-    @apply min-h-[220px] rounded-md border border-slate-200 bg-white px-4 py-3 outline-none;
+    @apply min-h-[280px] border-0 bg-white px-4 py-3 outline-none;
   }
 
   .ProseMirror:focus {
@@ -83,5 +111,192 @@ body {
 
   .ProseMirror ol {
     @apply mb-2 list-decimal ps-6;
+  }
+
+  .ProseMirror table {
+    @apply my-3 w-full border-collapse text-[13px];
+  }
+
+  .ProseMirror th,
+  .ProseMirror td {
+    @apply border border-slate-300 px-2 py-1.5 align-top;
+  }
+
+  .ProseMirror th {
+    @apply bg-slate-50 font-semibold;
+  }
+
+  .ProseMirror img {
+    @apply my-2 block h-auto max-w-full;
+  }
+
+  .esign-signature-field,
+  .ProseMirror .esign-signature-field,
+  .doc-content .esign-signature-field {
+    display: inline-block;
+    vertical-align: middle;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0 0 2px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-sizing: border-box;
+  }
+
+  .doc-content .esign-signature-field--signed {
+    border: none;
+    background: transparent;
+  }
+
+  .esign-signature-field__title,
+  .ProseMirror .esign-signature-field__title,
+  .doc-content .esign-signature-field__title,
+  .esign-signature-field__meta,
+  .doc-content .esign-signature-field__meta,
+  .esign-signature-field__via,
+  .doc-content .esign-signature-field__via,
+  .esign-signature-field__box,
+  .ProseMirror .esign-signature-field__box,
+  .doc-content .esign-signature-field__box {
+    display: none !important;
+  }
+
+  .esign-signature-field__line,
+  .ProseMirror .esign-signature-field__line,
+  .doc-content .esign-signature-field__line {
+    display: block;
+    width: 100%;
+    min-height: 1.35em;
+    border-bottom: 1px solid #64748b;
+    line-height: 1.35;
+  }
+
+  .doc-content .esign-signature-field__script {
+    display: block;
+    width: 100%;
+    min-height: 1.35em;
+    border-bottom: 1px solid #0f172a;
+    padding: 8px 2px 4px;
+    font-family: "Segoe Script", "Brush Script MT", "Lucida Handwriting", cursive;
+    font-size: 22px;
+    line-height: 1.8;
+    color: #1e3a8a;
+    overflow: visible;
+    min-height: 2em;
+  }
+
+  .doc-content .esign-signature-field__name {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.6;
+    color: #0f172a;
+  }
+
+  .ProseMirror .esign-signature-field {
+    cursor: grab;
+    user-select: none;
+    width: auto;
+    min-width: 7rem;
+    border-bottom: 1px dashed #f87171;
+    background: rgba(254, 226, 226, 0.35);
+  }
+
+  .ProseMirror .esign-signature-field.ProseMirror-selectednode {
+    outline: 2px solid #f87171;
+    outline-offset: 2px;
+  }
+
+  .esign-input-field,
+  .ProseMirror .esign-input-field,
+  .doc-content .esign-input-field {
+    display: inline-block;
+    vertical-align: baseline;
+    max-width: 100%;
+    box-sizing: border-box;
+    margin: 2px 0;
+    padding: 6px 0 2px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+    line-height: 1.7;
+  }
+
+  .doc-content td .esign-input-field,
+  .doc-content th .esign-input-field,
+  .doc-content td .esign-signature-field,
+  .doc-content th .esign-signature-field {
+    width: 100% !important;
+    display: block;
+  }
+
+  .doc-content .esign-input-field--filled {
+    border-bottom-color: #0f172a;
+    background: transparent;
+  }
+
+  .esign-input-field__title,
+  .ProseMirror .esign-input-field__title,
+  .doc-content .esign-input-field__title {
+    display: none !important;
+  }
+
+  .doc-content .esign-input-field__name,
+  .esign-input-field__name {
+    display: inline;
+    margin-right: 0.4em;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.7;
+    color: #0f172a;
+  }
+
+  .esign-input-field__box,
+  .ProseMirror .esign-input-field__box,
+  .doc-content .esign-input-field__box {
+    display: inline-block;
+    min-width: 8rem;
+    min-height: 1.6em;
+    border: none;
+    border-bottom: 1px solid #64748b;
+    padding: 2px 4px 1px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: #94a3b8;
+    letter-spacing: 0.04em;
+    white-space: normal;
+    overflow: visible;
+    vertical-align: baseline;
+  }
+
+  .doc-content .esign-input-field__box--filled {
+    color: #0f172a;
+    font-weight: 600;
+    letter-spacing: normal;
+  }
+
+  .ProseMirror .esign-input-field {
+    cursor: grab;
+    user-select: none;
+    border-bottom: 1px dashed #0ea5e9;
+    background: rgba(224, 242, 254, 0.35);
+  }
+
+  .ProseMirror .esign-input-field .esign-input-field__box {
+    color: #7dd3fc;
+  }
+
+  .ProseMirror .esign-input-field.ProseMirror-selectednode {
+    outline: 2px solid #38bdf8;
+    outline-offset: 2px;
+  }
+
+  .doc-content table td,
+  .doc-content table th {
+    vertical-align: middle;
   }
 }

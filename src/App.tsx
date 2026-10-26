@@ -9,6 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/context/AuthContext";
 import { fetchDocuments } from "@/lib/api";
 import type { SignDocument } from "@/lib/types";
+import ConfigureSignatoriesPage from "@/pages/ConfigureSignatoriesPage";
 import CreateDocumentPage from "@/pages/CreateDocumentPage";
 import DashboardPage from "@/pages/DashboardPage";
 import DocumentTypesPage from "@/pages/DocumentTypesPage";
@@ -17,7 +18,13 @@ import DocumentsListPage from "@/pages/DocumentsListPage";
 import LoginPage from "@/pages/LoginPage";
 import SignPage from "@/pages/SignPage";
 
-type AppPage = "dashboard" | "documents" | "create" | "view" | "document-types";
+type AppPage =
+  | "dashboard"
+  | "documents"
+  | "create"
+  | "view"
+  | "document-types"
+  | "configure-signatories";
 
 function readDocIdFromUrl() {
   return new URLSearchParams(window.location.search).get("doc");
@@ -210,6 +217,20 @@ export default function App() {
                     goDashboard();
                   }}
                   onEdit={() => setEditing(true)}
+                  onConfigureSignatories={() => setPage("configure-signatories")}
+                />
+              )}
+
+              {page === "configure-signatories" && selected && (
+                <ConfigureSignatoriesPage
+                  document={selected}
+                  onBack={() => setPage("view")}
+                  onSent={(doc) => {
+                    setSelected(doc);
+                    void queryClient.invalidateQueries({ queryKey: ["documents"] });
+                    void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+                    setPage("view");
+                  }}
                 />
               )}
             </div>

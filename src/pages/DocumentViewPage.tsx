@@ -4,22 +4,19 @@ import {
   ExternalLink,
   FileText,
   PenLine,
+  Send,
   TableProperties,
   Trash2,
   UserRound,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import DocumentTrackingPanel from "@/components/documents/DocumentTrackingPanel";
 import NeweastDocumentView from "@/components/documents/NeweastDocumentView";
-import SendRecipientsPanel from "@/components/documents/SendRecipientsPanel";
 import ElectronicSignatureDialog from "@/components/signature/ElectronicSignatureDialog";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
-import {
-  deleteDocumentApi,
-  hrSignDocumentApi,
-  sendDocumentApi,
-} from "@/lib/api";
+import { deleteDocumentApi, hrSignDocumentApi } from "@/lib/api";
 import { downloadNeweastPdf, openNeweastDocument } from "@/lib/neweast-document";
 import { STATUS_LABELS, type SignDocument } from "@/lib/types";
 import { statusTone } from "@/lib/status";
@@ -30,6 +27,7 @@ interface DocumentViewPageProps {
   onUpdated: (doc: SignDocument) => void;
   onDeleted: () => void;
   onEdit: () => void;
+  onConfigureSignatories: () => void;
 }
 
 type DetailTab = "overview" | "tracking" | "document";
@@ -51,22 +49,29 @@ function WorkflowCard({
       </div>
       <ol className="space-y-2 text-xs text-slate-600">
         <li className={cn(document.status !== "draft" && "font-medium text-emerald-700")}>
-          1. HR creates &amp; reviews document
-        </li>
-        <li className={cn(document.hrSignature && "font-medium text-emerald-700")}>
-          2. HR approves with electronic signature
+          1. Upload / create document (uploader is not auto-signatory)
         </li>
         <li className={cn(document.recipients.length > 0 && "font-medium text-emerald-700")}>
-          3. Choose employees + customize email
+          2. Configure signing steps (e.g. Employees → Manager)
+        </li>
+        <li className={cn(document.status !== "draft" && "font-medium text-emerald-700")}>
+          3. Start signing — each employee gets a private copy
         </li>
         <li className={cn(signedCount > 0 && "font-medium text-emerald-700")}>
-          4. Employee confirms e-signature
+          4. After the employee signs, the manager is emailed that same copy
         </li>
         <li className={cn(document.status === "completed" && "font-medium text-emerald-700")}>
-          5. Signed copy emailed to both parties
+          5. Completed copy emailed to parties
         </li>
       </ol>
       <p className="mt-3 text-[11px] text-slate-400">Logged in as {userEmail}</p>
+      {document.signingMode === "parallel" ? (
+        <p className="mt-2 text-[11px] text-amber-700">This document used parallel (all-at-once) delivery.</p>
+      ) : document.signingMode === "sequential" ? (
+        <p className="mt-2 text-[11px] text-emerald-700">
+          Step-based signing is active (next step waits for the current step).
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -76,11 +81,11 @@ export default function DocumentViewPage({
   onUpdated,
   onDeleted,
   onEdit,
+  onConfigureSignatories,
 }: DocumentViewPageProps) {
   const { user } = useAuth();
   const [hrSignOpen, setHrSignOpen] = useState(false);
   const [signing, setSigning] = useState(false);
-  const [sending, setSending] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [tab, setTab] = useState<DetailTab>(
     document.recipients.length > 0 ? "tracking" : "overview",
@@ -88,8 +93,11 @@ export default function DocumentViewPage({
 
   const signedCount = document.recipients.filter((r) => r.status === "signed").length;
   const canEdit = document.status === "draft";
-  const canHrSign = document.status === "draft";
+  const canHrSign =
+    document.status === "draft" && Boolean(document.includeCompanySignature);
+  // Uploader may send without signing first — choose ordered signatories instead.
   const canSend =
+    document.status === "draft" ||
     document.status === "hr_signed" ||
     document.status === "sent" ||
     document.status === "partially_signed";
@@ -106,52 +114,11 @@ export default function DocumentViewPage({
       onUpdated(updated);
       setHrSignOpen(false);
       setTab("overview");
-      toast.success("HR electronic signature applied — choose recipients to send");
+      toast.success("Optional company signature saved — configure who signs next");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to sign");
     } finally {
       setSigning(false);
-    }
-  };
-
-  const handleSend = async (payload: {
-    mode: "all" | "selected" | "department" | "company";
-    recipients: Array<{ name: string; email: string }>;
-    departmentCodes: number[];
-    companyCodes: string[];
-    emailSubject: string;
-    emailBody: string;
-  }) => {
-    if (payload.mode === "selected" && !payload.recipients.length) {
-      toast.error("Select at least one employee");
-      return;
-    }
-    if (payload.mode === "department" && !payload.departmentCodes.length) {
-      toast.error("Select at least one department");
-      return;
-    }
-    if (payload.mode === "company" && !payload.companyCodes.length) {
-      toast.error("Select at least one company");
-      return;
-    }
-
-    setSending(true);
-    try {
-      const updated = await sendDocumentApi(document.id, payload);
-      onUpdated(updated);
-      setTab("tracking");
-      if (updated.mailError) {
-        toast.warning(
-          `Prepared for ${updated.recipients.length} employee(s), but email delivery failed.`,
-          { description: updated.mailError, duration: 12000 },
-        );
-      } else {
-        toast.success(`Sent to ${updated.recipients.length} employee(s)`);
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to send");
-    } finally {
-      setSending(false);
     }
   };
 
@@ -231,7 +198,11 @@ export default function DocumentViewPage({
                   <Download className="h-4 w-4" />
                   {exporting ? "Exporting..." : "Download PDF"}
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => openNeweastDocument(document)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void openNeweastDocument(document)}
+                >
                   <ExternalLink className="h-4 w-4" />
                   Open
                 </Button>
@@ -241,9 +212,9 @@ export default function DocumentViewPage({
                   </Button>
                 ) : null}
                 {canHrSign ? (
-                  <Button size="sm" onClick={() => setHrSignOpen(true)}>
+                  <Button size="sm" variant="outline" onClick={() => setHrSignOpen(true)}>
                     <PenLine className="h-4 w-4" />
-                    Approve &amp; Sign
+                    Optional company sign
                   </Button>
                 ) : null}
                 <Button variant="outline" size="sm" onClick={() => void handleDelete()}>
@@ -307,6 +278,12 @@ export default function DocumentViewPage({
                       <dd className="font-medium text-slate-900">{STATUS_LABELS[document.status]}</dd>
                     </div>
                     <div className="flex justify-between gap-3">
+                      <dt className="text-slate-500">Company signature</dt>
+                      <dd className="font-medium text-slate-900">
+                        {document.includeCompanySignature ? "Required" : "Not required (signatories only)"}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
                       <dt className="text-slate-500">Created</dt>
                       <dd className="font-medium text-slate-900">
                         {formatDateTime(document.createdAt)}
@@ -335,7 +312,7 @@ export default function DocumentViewPage({
                   </div>
                   <dl className="mt-3 space-y-2 text-sm">
                     <div className="flex justify-between gap-3">
-                      <dt className="text-slate-500">Created by</dt>
+                      <dt className="text-slate-500">Prepared by</dt>
                       <dd className="text-right font-medium text-slate-900">
                         {document.createdByName}
                         <div className="text-xs font-normal text-slate-500">
@@ -344,14 +321,20 @@ export default function DocumentViewPage({
                       </dd>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <dt className="text-slate-500">HR signature</dt>
+                      <dt className="text-slate-500">Company sign</dt>
                       <dd className="text-right font-medium text-slate-900">
-                        {document.hrSignature?.name || "Not signed yet"}
+                        {document.hrSignature?.name || "Skipped (optional)"}
                         {document.hrSignature?.signedAt ? (
                           <div className="text-xs font-normal text-slate-500">
                             {formatDateTime(document.hrSignature.signedAt)}
                           </div>
                         ) : null}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-slate-500">Signing mode</dt>
+                      <dd className="font-medium capitalize text-slate-900">
+                        {document.signingMode || "sequential"}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-3">
@@ -392,11 +375,20 @@ export default function DocumentViewPage({
       {tab === "tracking" ? (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
           {canSend ? (
-            <SendRecipientsPanel
-              documentTitle={document.title}
-              sending={sending}
-              onSend={(payload) => void handleSend(payload)}
-            />
+            <section className="app-surface space-y-3 rounded-2xl p-5">
+              <div className="flex items-center gap-2">
+                <Users className="h-5 w-5 text-red-700" />
+                <h3 className="text-base font-bold text-slate-900">Who must sign?</h3>
+              </div>
+              <p className="text-sm text-slate-600">
+                Open the dedicated page to define signing steps clearly — for example several
+                employees in Step 1, then the manager in Step 2.
+              </p>
+              <Button type="button" onClick={onConfigureSignatories}>
+                <Send className="h-4 w-4" />
+                Configure signatories
+              </Button>
+            </section>
           ) : (
             <div />
           )}
@@ -409,11 +401,22 @@ export default function DocumentViewPage({
       ) : (
         <div className="space-y-4">
           {canSend ? (
-            <SendRecipientsPanel
-              documentTitle={document.title}
-              sending={sending}
-              onSend={(payload) => void handleSend(payload)}
-            />
+            <section className="app-surface flex flex-wrap items-center justify-between gap-3 rounded-2xl p-5">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Users className="h-5 w-5 text-red-700" />
+                  <h3 className="text-base font-bold text-slate-900">Who must sign?</h3>
+                </div>
+                <p className="mt-1 text-sm text-slate-600">
+                  Employees together in one step, then manager in the next — configured on a
+                  separate page.
+                </p>
+              </div>
+              <Button type="button" onClick={onConfigureSignatories}>
+                <Send className="h-4 w-4" />
+                Configure signatories
+              </Button>
+            </section>
           ) : null}
           <WorkflowCard
             document={document}
@@ -427,8 +430,8 @@ export default function DocumentViewPage({
       <ElectronicSignatureDialog
         open={hrSignOpen}
         defaultName={user?.name}
-        title="HR Electronic Signature"
-        description="Approve this document. Your electronic signature will be generated from your name and stored on the file."
+        title="Optional company signature"
+        description="Only use this if the uploader should also sign as the company. For Offer Letters, skip this and put Head of HR first in the signing queue."
         confirmLabel="Approve & Sign"
         isSubmitting={signing}
         onClose={() => setHrSignOpen(false)}

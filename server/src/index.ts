@@ -4,30 +4,41 @@ import express from "express";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { signAppToken } from "./auth.js";
+import { signAppToken, exchangeSharedAppToken } from "./auth.js";
 import { requireAuth } from "./auth-middleware.js";
 import {
   buildDashboardSummary,
+  canRecipientActNow,
   createDocument,
+  createPrivateSigningCopy,
   deleteDocument,
+  getCurrentStep,
+  getPendingInCurrentStep,
   getDocument,
   getDocumentByRecipientToken,
+  getRecipientStep,
+  isRecipientSuperseded,
   listDocuments,
+  makeRecipient,
   mergeRecipientsForSend,
   recomputeStatus,
   saveDocument,
+  sortRecipientsByOrder,
   updateDocument,
 } from "./documents-store.js";
 import {
+  getMailBccList,
   sendCompletedCopyEmail,
   sendSignRequestEmail,
+  sendThankYouForSigningEmail,
   verifySmtp,
 } from "./mailer.js";
+import { compactSignerOrdersInHtml } from "./signer-order.js";
 import {
   listEmployeesAndDepartments,
   resolveEmployeesForSend,
 } from "./employees.js";
-import type { Recipient, SignDocument } from "./types.js";
+import type { SignDocument, SigningMode } from "./types.js";
 import {
   createDocumentType,
   deleteDocumentType,
@@ -39,6 +50,7 @@ import {
   findUserByEmail,
   upsertMicrosoftUser,
 } from "./users-store.js";
+import { verifyIntranetLinkOtp } from "./bi-users.js";
 import {
   buildLoginErrorRedirect,
   buildMicrosoftLoginUrl,
@@ -55,7 +67,7 @@ const CLIENT_URL = (
 const staticDir = path.resolve(__dirname, "../../dist");
 
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "20mb" }));
 
 function clientIp(req: express.Request) {
   const forwarded = req.headers["x-forwarded-for"];
@@ -91,17 +103,25 @@ function publicClientUrl(req: express.Request) {
 }
 
 function publicDoc(doc: SignDocument, options?: { includeSignLinks?: boolean; baseUrl?: string }) {
+  const ordered = sortRecipientsByOrder(doc.recipients);
   return {
     ...doc,
-    recipients: doc.recipients.map((r) => ({
+    signingMode: doc.signingMode || "parallel",
+    includeCompanySignature: Boolean(doc.includeCompanySignature),
+    recipients: ordered.map((r) => ({
       id: r.id,
       name: r.name,
       email: r.email,
       status: r.status,
+      signingOrder: r.signingOrder || 0,
+      signingStep: r.signingStep || r.signingOrder || 0,
+      stepLabel: r.stepLabel,
+      stepRequireAll: r.stepRequireAll !== false,
       signedAt: r.signedAt,
       signatureName: r.signatureName,
       sentAt: r.sentAt,
       viewedAt: r.viewedAt,
+      fieldValues: r.fieldValues || {},
       ...(options?.includeSignLinks
         ? {
             signToken: r.token,
@@ -110,6 +130,34 @@ function publicDoc(doc: SignDocument, options?: { includeSignLinks?: boolean; ba
         : {}),
     })),
   };
+}
+
+async function emailSignRequestForRecipient(
+  doc: SignDocument,
+  recipient: SignDocument["recipients"][number],
+  extras?: {
+    designation?: string;
+    department?: string;
+    companyName?: string;
+    subjectTemplate?: string;
+    bodyTemplate?: string;
+  },
+) {
+  const baseUrl = publicSignBaseUrl();
+  const signUrl = `${baseUrl}/sign/${recipient.token}`;
+  return sendSignRequestEmail({
+    to: recipient.email,
+    recipientName: recipient.name,
+    designation: extras?.designation,
+    department: extras?.department,
+    companyName: extras?.companyName,
+    documentTitle: doc.title,
+    documentType: doc.documentType,
+    hrName: doc.createdByName,
+    signUrl,
+    subjectTemplate: extras?.subjectTemplate,
+    bodyTemplate: extras?.bodyTemplate,
+  });
 }
 
 app.get("/api/health", (_req, res) => {
@@ -123,7 +171,7 @@ app.get("/api/mail/status", async (_req, res) => {
     port: Number(process.env.SMTP_PORT || 587),
     user: process.env.SMTP_USER || "",
     enabled: process.env.MAIL_ENABLED !== "false",
-    testOverride: (process.env.MAIL_TEST_OVERRIDE || "").trim() || null,
+    bcc: getMailBccList(),
     ...result,
   });
 });
@@ -138,7 +186,7 @@ app.post("/api/auth/login", (req, res) => {
     return res.status(400).json({ error: "A valid work email is required" });
   }
 
-  // Temporary open access until Azure auth is enabled.
+  // Temporary open access until Azure auth is fully enforced.
   if (openLogin && !password) {
     const nameFromBody = String(req.body?.name ?? "").trim();
     const local = findUserByEmail(email);
@@ -150,8 +198,8 @@ app.post("/api/auth/login", (req, res) => {
         ?.replace(/[._-]+/g, " ")
         .replace(/\b\w/g, (c) => c.toUpperCase()) ||
       "HR User";
-    const user = { email, name, role: local?.role || "hr" };
-    const token = signAppToken(user);
+    const user = { email, name, role: local?.role || "hr", authSource: "open" as const };
+    const token = signAppToken(user, "open");
     return res.json({ token, user });
   }
 
@@ -162,8 +210,75 @@ app.post("/api/auth/login", (req, res) => {
   if (!user) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
-  const token = signAppToken(user);
-  return res.json({ token, user });
+  const token = signAppToken({ ...user, authSource: "open" }, "open");
+  return res.json({ token, user: { ...user, authSource: "open" } });
+});
+
+app.post("/api/auth/sso", (req, res) => {
+  try {
+    const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+    if (!token) {
+      return res.status(400).json({ error: "token is required" });
+    }
+    const result = exchangeSharedAppToken(token);
+    return res.json({ success: true, token: result.token, user: result.user });
+  } catch (error) {
+    return res.status(401).json({
+      error: error instanceof Error ? error.message : "SSO exchange failed",
+    });
+  }
+});
+
+app.post("/api/auth/intranet-link", async (req, res) => {
+  try {
+    const userId =
+      typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    const otp =
+      req.body?.otp != null && String(req.body.otp).trim()
+        ? String(req.body.otp).trim()
+        : "";
+    const companyCode =
+      typeof req.body?.companyCode === "string"
+        ? req.body.companyCode.trim()
+        : "";
+
+    if (!userId || !otp || !companyCode) {
+      return res.status(400).json({
+        error: "userId, otp, and companyCode are required",
+      });
+    }
+
+    const biUser = await verifyIntranetLinkOtp(userId, otp, companyCode);
+    if (!biUser) {
+      return res.status(401).json({ error: "Invalid Intranet login link" });
+    }
+
+    const email = biUser.USER_EMAIL?.trim().toLowerCase();
+    if (!email) {
+      return res.status(401).json({ error: "User email not found" });
+    }
+
+    const user = {
+      email,
+      name:
+        biUser.EMP_FULLNAME?.trim() ||
+        biUser.USER_NAME?.trim() ||
+        email,
+      role: "hr" as const,
+      authSource: "intranet" as const,
+    };
+
+    return res.json({
+      success: true,
+      token: signAppToken(user, "intranet"),
+      user,
+    });
+  } catch (error) {
+    console.error("Intranet link auth failed:", error);
+    return res.status(401).json({
+      error: error instanceof Error ? error.message : "Intranet login failed",
+    });
+  }
 });
 
 app.post("/api/auth/dev-login", (req, res) => {
@@ -177,8 +292,8 @@ app.post("/api/auth/dev-login", (req, res) => {
     return res.status(400).json({ error: "Name and email are required" });
   }
 
-  const user = { email, name };
-  const token = signAppToken(user);
+  const user = { email, name, authSource: "open" as const };
+  const token = signAppToken(user, "open");
   return res.json({ token, user });
 });
 
@@ -204,8 +319,11 @@ app.get("/api/auth/microsoft/callback", async (req, res) => {
         buildLoginErrorRedirect("Only NEWEAST Microsoft accounts can access E-Sign", returnTo),
       );
     }
-    const user = upsertMicrosoftUser(profile);
-    const token = signAppToken(user);
+    const user = {
+      ...upsertMicrosoftUser(profile),
+      authSource: "microsoft" as const,
+    };
+    const token = signAppToken(user, "microsoft");
     const target = new URL(returnTo);
     target.hash = new URLSearchParams({
       token,
@@ -319,6 +437,7 @@ app.post("/api/documents", requireAuth, (req, res) => {
   const documentType = String(req.body?.documentType ?? "NDA").trim() || "NDA";
   const contentHtml = String(req.body?.contentHtml ?? "").trim();
   const notes = String(req.body?.notes ?? "").trim();
+  const includeCompanySignature = Boolean(req.body?.includeCompanySignature);
 
   if (!title || !contentHtml) {
     return res.status(400).json({ error: "Title and content are required" });
@@ -327,8 +446,9 @@ app.post("/api/documents", requireAuth, (req, res) => {
   const doc = createDocument({
     title,
     documentType,
-    contentHtml,
+    contentHtml: compactSignerOrdersInHtml(contentHtml),
     notes,
+    includeCompanySignature,
     createdByEmail: req.user!.email,
     createdByName: req.user!.name,
   });
@@ -348,8 +468,14 @@ app.put("/api/documents/:id", requireAuth, (req, res) => {
   const updated = updateDocument(existing.id, {
     title: String(req.body?.title ?? existing.title).trim(),
     documentType: String(req.body?.documentType ?? existing.documentType).trim() || existing.documentType,
-    contentHtml: String(req.body?.contentHtml ?? existing.contentHtml),
+    contentHtml: compactSignerOrdersInHtml(
+      String(req.body?.contentHtml ?? existing.contentHtml),
+    ),
     notes: String(req.body?.notes ?? existing.notes ?? "").trim() || undefined,
+    includeCompanySignature:
+      req.body?.includeCompanySignature === undefined
+        ? Boolean(existing.includeCompanySignature)
+        : Boolean(req.body.includeCompanySignature),
   });
 
   return res.json(publicDoc(updated!, { includeSignLinks: true, baseUrl: publicClientUrl(req) }));
@@ -397,8 +523,16 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
   if (!existing) {
     return res.status(404).json({ error: "Document not found" });
   }
-  if (existing.status !== "hr_signed" && existing.status !== "sent" && existing.status !== "partially_signed") {
-    return res.status(400).json({ error: "HR must approve and sign the document before sending" });
+  // Uploader does not need to be the first signatory — draft can be sent directly.
+  if (
+    existing.status !== "draft" &&
+    existing.status !== "hr_signed" &&
+    existing.status !== "sent" &&
+    existing.status !== "partially_signed"
+  ) {
+    return res.status(400).json({
+      error: "Document cannot be sent in its current status",
+    });
   }
 
   const modeRaw = String(req.body?.mode ?? "selected").trim().toLowerCase();
@@ -406,9 +540,19 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
     modeRaw === "all" ||
     modeRaw === "department" ||
     modeRaw === "company" ||
-    modeRaw === "selected"
+    modeRaw === "selected" ||
+    modeRaw === "steps"
       ? modeRaw
       : "selected";
+
+  const signingModeRaw = String(req.body?.signingMode ?? "").trim().toLowerCase();
+  const signingMode: SigningMode =
+    signingModeRaw === "parallel" || signingModeRaw === "sequential"
+      ? signingModeRaw
+      : mode === "selected" || mode === "steps"
+        ? "sequential"
+        : "parallel";
+
   const subjectTemplate = String(req.body?.emailSubject ?? "").trim();
   const bodyTemplate = String(req.body?.emailBody ?? "").trim();
   const departmentCodes = Array.isArray(req.body?.departmentCodes)
@@ -421,13 +565,51 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
   let resolvedPeople: Array<{
     name: string;
     email: string;
+    signingStep?: number;
+    stepLabel?: string;
+    stepRequireAll?: boolean;
     designation?: string;
     department?: string;
     companyName?: string;
   }> = [];
 
   try {
-    if (mode === "all" || mode === "department" || mode === "company") {
+    if (mode === "steps") {
+      const steps = Array.isArray(req.body?.steps) ? req.body.steps : [];
+      const directory = await listEmployeesAndDepartments().catch(() => ({
+        employees: [] as Array<{
+          email: string;
+          name: string;
+          designation: string;
+          department: string;
+          companyName: string;
+        }>,
+      }));
+      const byEmail = new Map(
+        directory.employees.map((emp) => [emp.email.toLowerCase(), emp] as const),
+      );
+
+      steps.forEach((step: { label?: string; requireAll?: boolean; recipients?: unknown }, stepIndex: number) => {
+        const label = String(step?.label ?? `Step ${stepIndex + 1}`).trim() || `Step ${stepIndex + 1}`;
+        const requireAll = step?.requireAll !== false;
+        const members = Array.isArray(step?.recipients) ? step.recipients : [];
+        members.forEach((item: { name?: string; email?: string }) => {
+          const email = String(item.email ?? "").trim().toLowerCase();
+          if (!email.includes("@")) return;
+          const fromDir = byEmail.get(email);
+          resolvedPeople.push({
+            name: String(item.name ?? fromDir?.name ?? "").trim() || email,
+            email,
+            signingStep: stepIndex + 1,
+            stepLabel: label,
+            stepRequireAll: requireAll,
+            designation: fromDir?.designation,
+            department: fromDir?.department,
+            companyName: fromDir?.companyName,
+          });
+        });
+      });
+    } else if (mode === "all" || mode === "department" || mode === "company") {
       const employees = await resolveEmployeesForSend({
         mode,
         departmentCodes,
@@ -457,12 +639,14 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
         );
 
         resolvedPeople = incoming
-          .map((item: { name?: string; email?: string }) => {
+          .map((item: { name?: string; email?: string; signingStep?: number; stepLabel?: string }) => {
             const email = String(item.email ?? "").trim().toLowerCase();
             const fromDir = byEmail.get(email);
             return {
               name: String(item.name ?? fromDir?.name ?? "").trim() || email,
               email,
+              signingStep: item.signingStep ? Number(item.signingStep) : undefined,
+              stepLabel: item.stepLabel ? String(item.stepLabel) : undefined,
               designation: fromDir?.designation,
               department: fromDir?.department,
               companyName: fromDir?.companyName,
@@ -470,9 +654,11 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
           })
           .filter((item: { name: string; email: string }) => item.name && item.email.includes("@"));
       } else if (existing.recipients.length) {
-        resolvedPeople = existing.recipients.map((r) => ({
+        resolvedPeople = sortRecipientsByOrder(existing.recipients).map((r) => ({
           name: r.name,
           email: r.email,
+          signingStep: r.signingStep || r.signingOrder,
+          stepLabel: r.stepLabel,
         }));
       }
     }
@@ -488,11 +674,150 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
   }
 
   const now = new Date().toISOString();
-  const recipients = mergeRecipientsForSend(existing.recipients, resolvedPeople, now);
+  const baseUrl = publicSignBaseUrl();
+
+  /**
+   * One private copy per Step 1 person whenever more than one person is on that
+   * level. Later steps (manager) are copied onto each document. Nobody is declined
+   * because a colleague signed first.
+   */
+  const step1People = resolvedPeople.filter((p) => Number(p.signingStep || 1) === 1);
+  const laterPeople = resolvedPeople.filter((p) => Number(p.signingStep || 1) > 1);
+  const shouldFanOut =
+    mode === "steps" &&
+    signingMode === "sequential" &&
+    step1People.length > 1;
+
+  if (shouldFanOut) {
+    const metaByEmail = new Map(
+      resolvedPeople.map((person) => [person.email.toLowerCase(), person] as const),
+    );
+    const createdDocs: SignDocument[] = [];
+    const mailFailures: Array<{ email: string; error: string }> = [];
+    let mailedCount = 0;
+
+    for (const employee of step1People) {
+      const recipients = [
+        {
+          ...makeRecipient(employee.name, employee.email, 1, 1, employee.stepLabel),
+          stepRequireAll: true,
+          sentAt: now,
+        },
+        ...laterPeople.map((person, index) => ({
+          ...makeRecipient(
+            person.name,
+            person.email,
+            index + 2,
+            Number(person.signingStep || index + 2),
+            person.stepLabel,
+          ),
+          stepRequireAll: true,
+        })),
+      ];
+
+      const copy = createPrivateSigningCopy(
+        existing,
+        employee.name,
+        recipients,
+        signingMode,
+      );
+      createdDocs.push(copy);
+    }
+
+    const mailJobs = createdDocs.flatMap((copy) => {
+      const first = copy.recipients.find((r) => getRecipientStep(r) === 1);
+      if (!first) return [];
+      const meta = metaByEmail.get(first.email.toLowerCase());
+      return [{ copy, first, meta }];
+    });
+
+    const sendJobs = async () => {
+      for (const job of mailJobs) {
+        const result = await emailSignRequestForRecipient(job.copy, job.first, {
+          designation: job.meta?.designation,
+          department: job.meta?.department,
+          companyName: job.meta?.companyName,
+          subjectTemplate: subjectTemplate || undefined,
+          bodyTemplate: bodyTemplate || undefined,
+        });
+        if (!result.ok) {
+          console.error(
+            `[e-sign mail] failed ${job.first.email}: ${result.error || "Unknown mail error"}`,
+          );
+        }
+      }
+    };
+
+    // Large fan-out (all employees) must not hold the HTTP request open.
+    const mailInBackground = mailJobs.length > 25;
+    if (!mailInBackground) {
+      for (const job of mailJobs) {
+        const result = await emailSignRequestForRecipient(job.copy, job.first, {
+          designation: job.meta?.designation,
+          department: job.meta?.department,
+          companyName: job.meta?.companyName,
+          subjectTemplate: subjectTemplate || undefined,
+          bodyTemplate: bodyTemplate || undefined,
+        });
+        mailedCount += 1;
+        if (!result.ok) {
+          mailFailures.push({ email: job.first.email, error: result.error || "Unknown mail error" });
+        }
+      }
+    } else {
+      mailedCount = mailJobs.length;
+      void sendJobs();
+    }
+
+    // Retire the shared template so nobody signs a multi-party leak copy.
+    const retired = saveDocument({
+      ...existing,
+      contentHtml: compactSignerOrdersInHtml(existing.contentHtml),
+      status: "cancelled",
+      notes: [
+        existing.notes,
+        `Split into ${createdDocs.length} private signing copies (one employee ↔ manager each).`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      updatedAt: now,
+    })!;
+
+    return res.json({
+      ...publicDoc(retired, { includeSignLinks: false, baseUrl }),
+      privateCopyCount: createdDocs.length,
+      // Only the first copy is returned in full so a large send (all employees)
+      // does not ship hundreds of HTML bodies back to the browser.
+      privateCopies: createdDocs[0]
+        ? [publicDoc(createdDocs[0], { includeSignLinks: true, baseUrl })]
+        : [],
+      mailedCount,
+      mailFailures,
+      mailError: mailFailures.length
+        ? `Email delivery failed for ${mailFailures.length} of ${mailedCount} recipient(s): ${mailFailures[0]!.error}`
+        : undefined,
+      message: mailInBackground
+        ? `Created ${createdDocs.length} private documents. Emails are being sent.`
+        : `Created ${createdDocs.length} private documents (one per employee).`,
+    });
+  }
+
+  const recipients = mergeRecipientsForSend(existing.recipients, resolvedPeople, {
+    // Parallel: mark everyone sent. Sequential: current step marked below.
+    markAllSentAt: signingMode === "parallel" ? now : null,
+  });
+
+  if (signingMode === "sequential") {
+    for (const person of getPendingInCurrentStep(recipients)) {
+      person.sentAt = now;
+    }
+  }
 
   const draft: SignDocument = {
     ...existing,
+    contentHtml: compactSignerOrdersInHtml(existing.contentHtml),
     recipients,
+    signingMode,
     status: "sent",
     updatedAt: now,
   };
@@ -502,28 +827,22 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
   const metaByEmail = new Map(
     resolvedPeople.map((person) => [person.email.toLowerCase(), person] as const),
   );
-  const baseUrl = publicSignBaseUrl();
 
   const mailFailures: Array<{ email: string; error: string }> = [];
-  const pendingToMail = saved.recipients.filter((r) => {
-    if (r.status !== "pending") return false;
-    // Only mail people included in this send batch
-    return metaByEmail.has(r.email.toLowerCase());
-  });
+  const pendingToMail =
+    signingMode === "sequential"
+      ? getPendingInCurrentStep(saved.recipients)
+      : saved.recipients.filter((r) => {
+          if (r.status !== "pending") return false;
+          return metaByEmail.has(r.email.toLowerCase());
+        });
 
   for (const recipient of pendingToMail) {
-    const signUrl = `${baseUrl}/sign/${recipient.token}`;
     const meta = metaByEmail.get(recipient.email.toLowerCase());
-    const result = await sendSignRequestEmail({
-      to: recipient.email,
-      recipientName: recipient.name,
+    const result = await emailSignRequestForRecipient(saved, recipient, {
       designation: meta?.designation,
       department: meta?.department,
       companyName: meta?.companyName,
-      documentTitle: saved.title,
-      documentType: saved.documentType,
-      hrName: saved.createdByName,
-      signUrl,
       subjectTemplate: subjectTemplate || undefined,
       bodyTemplate: bodyTemplate || undefined,
     });
@@ -534,6 +853,7 @@ app.post("/api/documents/:id/send", requireAuth, async (req, res) => {
 
   return res.json({
     ...publicDoc(saved, { includeSignLinks: true, baseUrl }),
+    mailedCount: pendingToMail.length,
     mailFailures,
     mailError: mailFailures.length
       ? `Email delivery failed for ${mailFailures.length} of ${pendingToMail.length} recipient(s): ${mailFailures[0]!.error}`
@@ -550,17 +870,13 @@ app.post("/api/documents/:id/remind/:recipientId", requireAuth, async (req, res)
   if (recipient.status === "signed") {
     return res.status(400).json({ error: "Recipient has already signed" });
   }
+  if (!canRecipientActNow(existing, recipient.id)) {
+    return res.status(400).json({
+      error: "Sequential signing: this person is not next in the signing order yet",
+    });
+  }
 
-  const baseUrl = publicSignBaseUrl();
-  const signUrl = `${baseUrl}/sign/${recipient.token}`;
-  const result = await sendSignRequestEmail({
-    to: recipient.email,
-    recipientName: recipient.name,
-    documentTitle: existing.title,
-    documentType: existing.documentType,
-    hrName: existing.createdByName,
-    signUrl,
-  });
+  const result = await emailSignRequestForRecipient(existing, recipient);
 
   recipient.sentAt = new Date().toISOString();
   saveDocument(existing);
@@ -568,7 +884,7 @@ app.post("/api/documents/:id/remind/:recipientId", requireAuth, async (req, res)
   return res.json({
     ok: result.ok,
     mailError: result.ok ? undefined : result.error,
-    document: publicDoc(existing, { includeSignLinks: true, baseUrl }),
+    document: publicDoc(existing, { includeSignLinks: true, baseUrl: publicSignBaseUrl() }),
   });
 });
 
@@ -579,10 +895,42 @@ app.get("/api/sign/:token", (req, res) => {
   }
 
   const { document, recipient } = found;
+
+  if (isRecipientSuperseded(document, recipient.id)) {
+    return res.status(403).json({
+      error:
+        "This signing link is no longer valid. Another party already completed a private copy of this agreement. Contact the sender if you still need your own copy to sign.",
+      superseded: true,
+    });
+  }
+
+  if (
+    recipient.status !== "signed" &&
+    !canRecipientActNow(document, recipient.id)
+  ) {
+    return res.status(403).json({
+      error:
+        "It is not your turn to sign yet. You will receive an email when the previous signatory has completed.",
+      waitingForTurn: true,
+    });
+  }
+
   if (!recipient.viewedAt) {
     recipient.viewedAt = new Date().toISOString();
     saveDocument(document);
   }
+
+  // Privacy: only parties on this signing session. Never expose declined peers
+  // or other Step-1 employees from a leaked shared document.
+  const viewerStep = getRecipientStep(recipient);
+  const visibleRecipients = sortRecipientsByOrder(document.recipients).filter((r) => {
+    if (r.status === "declined") return false;
+    if (r.id === recipient.id) return true;
+    const step = getRecipientStep(r);
+    // Never show another person in the same step (peers).
+    if (step === viewerStep) return false;
+    return true;
+  });
 
   return res.json({
     token: recipient.token,
@@ -591,8 +939,12 @@ app.get("/api/sign/:token", (req, res) => {
       name: recipient.name,
       email: recipient.email,
       status: recipient.status,
+      signingOrder: recipient.signingOrder,
+      signingStep: recipient.signingStep || recipient.signingOrder,
+      stepLabel: recipient.stepLabel,
       signedAt: recipient.signedAt,
       signatureName: recipient.signatureName,
+      fieldValues: recipient.fieldValues || {},
     },
     document: {
       id: document.id,
@@ -600,11 +952,26 @@ app.get("/api/sign/:token", (req, res) => {
       documentType: document.documentType,
       contentHtml: document.contentHtml,
       status: document.status,
+      signingMode: document.signingMode || "parallel",
       createdByName: document.createdByName,
       createdByEmail: document.createdByEmail,
+      includeCompanySignature: Boolean(document.includeCompanySignature),
       hrSignature: document.hrSignature,
       completedAt: document.completedAt,
       createdAt: document.createdAt,
+      counterpartName: document.counterpartName,
+      recipients: visibleRecipients.map((r) => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        status: r.status,
+        signingOrder: r.signingOrder,
+        signingStep: r.signingStep || r.signingOrder,
+        stepLabel: r.stepLabel,
+        signedAt: r.signedAt,
+        signatureName: r.signatureName,
+        fieldValues: r.fieldValues || {},
+      })),
     },
   });
 });
@@ -622,31 +989,90 @@ app.post("/api/sign/:token/confirm", async (req, res) => {
   if (document.status === "cancelled") {
     return res.status(400).json({ error: "This document was cancelled" });
   }
+  if (isRecipientSuperseded(document, recipient.id)) {
+    return res.status(403).json({
+      error:
+        "This signing link is no longer valid. Another party already completed a private copy of this agreement.",
+      superseded: true,
+    });
+  }
+  if (!canRecipientActNow(document, recipient.id)) {
+    return res.status(403).json({
+      error:
+        "It is not your turn to sign yet. You will receive an email when the previous signatory has completed.",
+    });
+  }
 
   const signatureName = String(req.body?.signatureName ?? recipient.name).trim();
   if (!signatureName) {
     return res.status(400).json({ error: "Signature name is required" });
   }
 
+  const rawFieldValues =
+    req.body?.fieldValues && typeof req.body.fieldValues === "object"
+      ? (req.body.fieldValues as Record<string, unknown>)
+      : {};
+  const fieldValues: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rawFieldValues)) {
+    const cleaned = String(value ?? "").trim();
+    if (cleaned) fieldValues[key] = cleaned.slice(0, 500);
+  }
+
   recipient.status = "signed";
   recipient.signedAt = new Date().toISOString();
   recipient.signatureName = signatureName;
+  recipient.fieldValues = fieldValues;
 
   document.status = recomputeStatus({ ...document, status: "sent" });
   if (document.status === "completed") {
     document.completedAt = new Date().toISOString();
   }
   const saved = saveDocument(document)!;
+  const baseUrl = publicSignBaseUrl();
+
+  // Always thank the signer immediately (general policy).
+  await sendThankYouForSigningEmail({
+    to: recipient.email,
+    recipientName: recipient.name,
+    documentTitle: saved.title,
+    documentType: saved.documentType,
+    viewUrl: `${baseUrl}/sign/${recipient.token}`,
+    waitingForNext: saved.status !== "completed",
+  });
+
+  // Sequential by step: as soon as the current step is satisfied, email the next step.
+  if (saved.signingMode === "sequential" && saved.status !== "completed") {
+    const nextStep = getCurrentStep(saved.recipients);
+    if (nextStep) {
+      const toNotify = sortRecipientsByOrder(saved.recipients).filter(
+        (r) =>
+          r.status === "pending" &&
+          (r.signingStep || r.signingOrder || 1) === nextStep &&
+          !r.sentAt,
+      );
+      if (toNotify.length) {
+        const now = new Date().toISOString();
+        for (const next of toNotify) {
+          next.sentAt = now;
+        }
+        saveDocument(saved);
+        for (const next of toNotify) {
+          await emailSignRequestForRecipient(saved, next);
+        }
+      }
+    }
+  }
 
   if (saved.status === "completed") {
     const parties = [
-      `${saved.hrSignature?.name || saved.createdByName} (HR)`,
-      ...saved.recipients
+      ...(saved.hrSignature
+        ? [`${saved.hrSignature.name} (Company)`]
+        : [`${saved.createdByName} (Prepared by)`]),
+      ...sortRecipientsByOrder(saved.recipients)
         .filter((r) => r.status === "signed")
-        .map((r) => `${r.signatureName || r.name} (Employee)`),
+        .map((r) => `${r.signatureName || r.name} (Signatory ${r.signingOrder || ""})`.trim()),
     ];
 
-    const baseUrl = publicSignBaseUrl();
     await sendCompletedCopyEmail({
       to: saved.createdByEmail,
       recipientName: saved.createdByName,
@@ -676,6 +1102,9 @@ app.post("/api/sign/:token/confirm", async (req, res) => {
       name: recipient.name,
       email: recipient.email,
       status: recipient.status,
+      signingOrder: recipient.signingOrder,
+      signingStep: recipient.signingStep || recipient.signingOrder,
+      stepLabel: recipient.stepLabel,
       signedAt: recipient.signedAt,
       signatureName: recipient.signatureName,
     },
@@ -693,4 +1122,15 @@ if (existsSync(staticDir)) {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`E-Sign listening on http://0.0.0.0:${PORT}`);
   console.log(`Public client URL: ${CLIENT_URL}`);
+  // Warm employee directory in the background so the first UI load is faster.
+  void listEmployeesAndDepartments()
+    .then((data) => {
+      console.log(`Employee directory ready: ${data.employees.length} people`);
+    })
+    .catch((error) => {
+      console.warn(
+        "Employee directory warm-up failed:",
+        error instanceof Error ? error.message : error,
+      );
+    });
 });

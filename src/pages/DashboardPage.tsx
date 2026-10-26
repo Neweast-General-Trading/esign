@@ -18,6 +18,7 @@ import { fetchDashboardSummary, fetchDocuments } from "@/lib/api";
 import { STATUS_LABELS, type SignDocument } from "@/lib/types";
 import { statusDot } from "@/lib/status";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
+import { APP_NAME } from "@/lib/branding";
 
 interface DashboardPageProps {
   onCreateNew: () => void;
@@ -117,7 +118,7 @@ export default function DashboardPage({
         <div className="flex flex-col gap-5 p-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-semibold tracking-[0.18em] text-red-600">
-              E-SIGN WORKSPACE
+              {APP_NAME.toUpperCase()} WORKSPACE
             </p>
             <h2 className="mt-2 font-display text-3xl tracking-tight text-slate-900">
               {greeting}, {user?.name?.split(" ")[0] || "there"}
@@ -360,7 +361,7 @@ export default function DashboardPage({
               <div className="mt-2 font-display text-3xl font-semibold text-slate-900">
                 {summary?.signedRecipients ?? 0}
               </div>
-              <p className="mt-1 text-xs text-slate-500">Employee e-signatures stored</p>
+              <p className="mt-1 text-xs text-slate-500">{APP_NAME} signatures stored</p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
               <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">

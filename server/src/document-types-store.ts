@@ -36,7 +36,7 @@ const DEFAULT_TYPES: Array<Omit<DocumentTypeDefinition, "id" | "createdAt" | "up
 <p><strong>3. Duration</strong></p>
 <p>These obligations shall continue during employment and for a period of three (3) years thereafter.</p>
 <p><strong>4. Acknowledgement</strong></p>
-<p>By signing electronically, both parties acknowledge they have read, understood, and agree to the terms of this agreement.</p>`,
+<p>By signing via E-Sign, both parties acknowledge they have read, understood, and agree to the terms of this agreement.</p>`,
     active: true,
   },
   {

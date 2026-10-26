@@ -95,7 +95,7 @@ let employeesCache: {
   companies: CompanyOption[];
 } | null = null;
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 15 * 60 * 1000;
 
 async function getSqlPool() {
   if (!process.env.SQL_DB_SERVER || !process.env.SQL_DB_DATABASE) {
@@ -108,6 +108,8 @@ async function getSqlPool() {
     password,
     server: process.env.SQL_DB_SERVER,
     database: process.env.SQL_DB_DATABASE,
+    connectionTimeout: 8000,
+    requestTimeout: 8000,
     options: {
       encrypt: false,
       trustServerCertificate: true,
@@ -121,29 +123,38 @@ async function getPayrollDesignationMap() {
     return designationCache.map;
   }
 
-  const pool = await getSqlPool();
-  if (!pool) return new Map<string, string>();
+  try {
+    const pool = await getSqlPool();
+    if (!pool) return new Map<string, string>();
 
-  const result = await pool.request().query(`
-    SELECT
-      LTRIM(RTRIM(EmpId)) AS EmpId,
-      LTRIM(RTRIM(DesignationName)) AS DesignationName
-    FROM Payroll_Employee
-    WHERE EmpActive = 'Y'
-      AND DesignationName IS NOT NULL
-      AND LTRIM(RTRIM(DesignationName)) <> ''
-  `);
+    const result = await pool.request().query(`
+      SELECT
+        LTRIM(RTRIM(EmpId)) AS EmpId,
+        LTRIM(RTRIM(DesignationName)) AS DesignationName
+      FROM Payroll_Employee
+      WHERE EmpActive = 'Y'
+        AND DesignationName IS NOT NULL
+        AND LTRIM(RTRIM(DesignationName)) <> ''
+    `);
 
-  const map = new Map<string, string>();
-  for (const row of result.recordset ?? []) {
-    const empId = String(row.EmpId ?? "").trim();
-    const designation = String(row.DesignationName ?? "").trim();
-    if (!empId || !designation) continue;
-    if (!map.has(empId)) map.set(empId, designation);
+    const map = new Map<string, string>();
+    for (const row of result.recordset ?? []) {
+      const empId = String(row.EmpId ?? "").trim();
+      const designation = String(row.DesignationName ?? "").trim();
+      if (!empId || !designation) continue;
+      if (!map.has(empId)) map.set(empId, designation);
+    }
+
+    designationCache = { loadedAt: Date.now(), map };
+    return map;
+  } catch (error) {
+    console.warn(
+      "Payroll designation lookup skipped:",
+      error instanceof Error ? error.message : error,
+    );
+    // Keep serving the employee directory even if MSSQL is slow/down.
+    return designationCache?.map ?? new Map<string, string>();
   }
-
-  designationCache = { loadedAt: Date.now(), map };
-  return map;
 }
 
 type BiUserRow = {
@@ -223,8 +234,11 @@ export async function listEmployeesAndDepartments() {
     return employeesCache;
   }
 
-  const designationMap = await getPayrollDesignationMap();
-  const perCompany = await Promise.all(COMPANIES.map((company) => loadEmployeesFromCompany(company)));
+  // Don't block the whole directory on payroll SQL — load HANA first.
+  const [designationMap, perCompany] = await Promise.all([
+    getPayrollDesignationMap(),
+    Promise.all(COMPANIES.map((company) => loadEmployeesFromCompany(company))),
+  ]);
 
   const employees: Employee[] = [];
   const seenEmails = new Set<string>();

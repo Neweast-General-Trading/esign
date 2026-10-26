@@ -74,6 +74,24 @@ export function loginOpen(email: string, name?: string) {
   });
 }
 
+export function exchangeIntranetLink(payload: {
+  userId: string;
+  otp: string;
+  companyCode: string;
+}) {
+  return api<{ success: boolean; token: string; user: AuthUser }>("/auth/intranet-link", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function exchangeSsoToken(token: string) {
+  return api<{ success: boolean; token: string; user: AuthUser }>("/auth/sso", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
 export function devLogin(name: string, email: string) {
   return api<{ token: string; user: AuthUser }>("/auth/dev-login", {
     method: "POST",
@@ -98,6 +116,7 @@ export function createDocumentApi(payload: {
   documentType: string;
   contentHtml: string;
   notes?: string;
+  includeCompanySignature?: boolean;
 }) {
   return api<SignDocument>("/documents", {
     method: "POST",
@@ -112,6 +131,7 @@ export function updateDocumentApi(
     documentType: string;
     contentHtml: string;
     notes?: string;
+    includeCompanySignature?: boolean;
   },
 ) {
   return api<SignDocument>(`/documents/${id}`, {
@@ -202,18 +222,34 @@ export function deleteDocumentTypeApi(id: string) {
 export function sendDocumentApi(
   id: string,
   payload: {
-    mode: "all" | "selected" | "department" | "company";
-    recipients?: Array<{ name: string; email: string }>;
+    mode: "all" | "selected" | "department" | "company" | "steps";
+    recipients?: Array<{
+      name: string;
+      email: string;
+      signingStep?: number;
+      stepLabel?: string;
+      stepRequireAll?: boolean;
+    }>;
+    steps?: Array<{
+      label: string;
+      requireAll?: boolean;
+      recipients: Array<{ name: string; email: string }>;
+    }>;
     departmentCodes?: number[];
     companyCodes?: string[];
     emailSubject?: string;
     emailBody?: string;
+    signingMode?: "sequential" | "parallel";
   },
 ) {
   return api<
     SignDocument & {
+      mailedCount?: number;
       mailFailures?: Array<{ email: string; error: string }>;
       mailError?: string;
+      message?: string;
+      privateCopyCount?: number;
+      privateCopies?: SignDocument[];
     }
   >(`/documents/${id}/send`, {
     method: "POST",
@@ -239,8 +275,12 @@ export function fetchSignRequest(token: string) {
       name: string;
       email: string;
       status: "pending" | "signed" | "declined";
+      signingOrder?: number;
+      signingStep?: number;
+      stepLabel?: string;
       signedAt?: string;
       signatureName?: string;
+      fieldValues?: Record<string, string>;
     };
     document: {
       id: string;
@@ -248,8 +288,10 @@ export function fetchSignRequest(token: string) {
       documentType: string;
       contentHtml: string;
       status: string;
+      signingMode?: "sequential" | "parallel";
       createdByName: string;
       createdByEmail: string;
+      includeCompanySignature?: boolean;
       hrSignature?: {
         name: string;
         email: string;
@@ -258,11 +300,27 @@ export function fetchSignRequest(token: string) {
       };
       completedAt?: string;
       createdAt: string;
+      recipients?: Array<{
+        id: string;
+        name: string;
+        email: string;
+        status: "pending" | "signed" | "declined";
+        signingOrder?: number;
+        signingStep?: number;
+        stepLabel?: string;
+        signedAt?: string;
+        signatureName?: string;
+        fieldValues?: Record<string, string>;
+      }>;
     };
   }>(`/sign/${token}`);
 }
 
-export function confirmSignApi(token: string, signatureName: string) {
+export function confirmSignApi(
+  token: string,
+  signatureName: string,
+  fieldValues?: Record<string, string>,
+) {
   return api<{
     ok: boolean;
     status: string;
@@ -273,9 +331,10 @@ export function confirmSignApi(token: string, signatureName: string) {
       status: string;
       signedAt?: string;
       signatureName?: string;
+      fieldValues?: Record<string, string>;
     };
   }>(`/sign/${token}/confirm`, {
     method: "POST",
-    body: JSON.stringify({ signatureName }),
+    body: JSON.stringify({ signatureName, fieldValues: fieldValues || {} }),
   });
 }

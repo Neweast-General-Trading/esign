@@ -10,15 +10,20 @@ import {
 import { toast } from "sonner";
 import {
   clearAuthSession,
+  exchangeIntranetLink,
+  exchangeSsoToken,
   fetchAuthProfile,
   loadAuthToken,
   loadAuthUser,
   loginOpen,
   storeAuthSession,
 } from "@/lib/api";
+import { consumeIntranetLinkFromQuery } from "@/lib/intranet-link-auth";
 import {
   consumeAuthRedirect,
+  consumeTokenFromQuery,
   readLoginErrorFromUrl,
+  startMicrosoftLogin,
 } from "@/lib/microsoft-login";
 import type { AuthUser } from "@/lib/types";
 
@@ -29,6 +34,7 @@ interface AuthContextValue {
   isBootstrapping: boolean;
   isLoggingIn: boolean;
   login: (email: string, name?: string) => Promise<void>;
+  loginWithMicrosoft: () => void;
   logout: () => void;
 }
 
@@ -53,21 +59,73 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function bootstrap() {
+      const loginError = readLoginErrorFromUrl();
+      if (loginError) toast.error(loginError);
+
+      // 1) Microsoft OAuth callback hash
       const redirected = consumeAuthRedirect();
       if (redirected?.token) {
-        storeAuthSession(redirected.token, redirected.user);
+        const sessionUser: AuthUser = {
+          ...redirected.user,
+          authSource: "microsoft",
+        };
+        storeAuthSession(redirected.token, sessionUser);
         if (!cancelled) {
           setToken(redirected.token);
-          setUser(redirected.user);
+          setUser(sessionUser);
           setIsBootstrapping(false);
-          toast.success(`Welcome, ${redirected.user.name || redirected.user.email}`);
+          toast.success(`Welcome, ${sessionUser.name || sessionUser.email}`);
         }
         return;
       }
 
-      const loginError = readLoginErrorFromUrl();
-      if (loginError) toast.error(loginError);
+      // 2) Intranet OTP link (?uSrId=&LoTp=&co=)
+      const intranetLink = consumeIntranetLinkFromQuery();
+      if (intranetLink) {
+        try {
+          const session = await exchangeIntranetLink(intranetLink);
+          if (cancelled) return;
+          const sessionUser: AuthUser = {
+            ...session.user,
+            authSource: "intranet",
+          };
+          storeAuthSession(session.token, sessionUser);
+          setToken(session.token);
+          setUser(sessionUser);
+          setIsBootstrapping(false);
+          toast.success(`Welcome, ${sessionUser.name || sessionUser.email}`);
+          return;
+        } catch {
+          if (!cancelled) {
+            toast.error("Invalid or expired Intranet login link");
+          }
+        }
+      }
 
+      // 3) Shared Intranet JWT (?token= / ?jwt=)
+      const sharedToken = consumeTokenFromQuery();
+      if (sharedToken) {
+        try {
+          const session = await exchangeSsoToken(sharedToken);
+          if (cancelled) return;
+          const sessionUser: AuthUser = {
+            ...session.user,
+            authSource: "intranet",
+          };
+          storeAuthSession(session.token, sessionUser);
+          setToken(session.token);
+          setUser(sessionUser);
+          setIsBootstrapping(false);
+          toast.success(`Welcome, ${sessionUser.name || sessionUser.email}`);
+          return;
+        } catch {
+          if (!cancelled) {
+            toast.error("Could not sign in with the Intranet session");
+          }
+        }
+      }
+
+      // 4) Existing stored session
       const existingToken = loadAuthToken();
       if (!existingToken) {
         if (!cancelled) setIsBootstrapping(false);
@@ -111,6 +169,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loginWithMicrosoft = useCallback(() => {
+    setIsLoggingIn(true);
+    startMicrosoftLogin({ silent: false });
+  }, []);
+
   const logout = useCallback(() => {
     clearAuthSession();
     setToken(null);
@@ -126,9 +189,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isBootstrapping,
       isLoggingIn,
       login,
+      loginWithMicrosoft,
       logout,
     }),
-    [user, token, isBootstrapping, isLoggingIn, login, logout],
+    [user, token, isBootstrapping, isLoggingIn, login, loginWithMicrosoft, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

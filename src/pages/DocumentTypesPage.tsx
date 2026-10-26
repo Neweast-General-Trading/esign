@@ -121,7 +121,7 @@ export default function DocumentTypesPage({ onBack }: DocumentTypesPageProps) {
         <div>
           <h2 className="text-xl font-bold text-slate-900">Document Types</h2>
           <p className="text-xs text-slate-500">
-            Define types used when creating e-sign documents
+            Define types used when creating E-Sign documents
           </p>
         </div>
       </div>
